@@ -1,7 +1,7 @@
 import json
 from collections.abc import AsyncIterator
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -243,6 +243,70 @@ async def test_perplexity_astream_emits_single_valued_usage_metadata_once() -> N
     assert full.response_metadata["search_context_size"] == "low"
     assert full.response_metadata["num_search_queries"] == 2
     assert full.response_metadata["model_name"] == "sonar"
+
+
+def test_perplexity_stream_forwards_stop_without_stop_sequences(
+    mocker: MockerFixture,
+) -> None:
+    """The SDK accepts `stop`; `stop_sequences` is not a valid keyword."""
+    llm = ChatPerplexity(model="sonar", api_key="test")
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}
+    ]
+    patcher = mocker.patch.object(
+        llm.client.chat.completions, "create", return_value=mock_stream
+    )
+
+    list(llm.stream("Hello", stop=["\n"]))
+
+    kwargs = patcher.call_args.kwargs
+    assert kwargs["stop"] == ["\n"]
+    assert "stop_sequences" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_perplexity_astream_forwards_stop_without_stop_sequences(
+    mocker: MockerFixture,
+) -> None:
+    """The async streaming path must not append `stop_sequences` either."""
+    llm = ChatPerplexity(model="sonar", api_key="test")
+
+    async def _chunk_iter() -> AsyncIterator[dict[str, Any]]:
+        yield {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}
+
+    patcher = mocker.patch.object(
+        llm.async_client.chat.completions,
+        "create",
+        new=AsyncMock(return_value=_chunk_iter()),
+    )
+
+    chunks = [chunk async for chunk in llm.astream("Hello", stop=["\n"])]
+
+    assert chunks
+    kwargs = patcher.call_args.kwargs
+    assert kwargs["stop"] == ["\n"]
+    assert "stop_sequences" not in kwargs
+
+
+def test_perplexity_stream_without_stop_omits_stop_params(
+    mocker: MockerFixture,
+) -> None:
+    """The default path should not add any stop-related kwargs."""
+    llm = ChatPerplexity(model="sonar", api_key="test")
+    mock_stream = MagicMock()
+    mock_stream.__iter__.return_value = [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}
+    ]
+    patcher = mocker.patch.object(
+        llm.client.chat.completions, "create", return_value=mock_stream
+    )
+
+    list(llm.stream("Hello"))
+
+    kwargs = patcher.call_args.kwargs
+    assert "stop" not in kwargs
+    assert "stop_sequences" not in kwargs
 
 
 def test_create_usage_metadata_basic() -> None:
